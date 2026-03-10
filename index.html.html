@@ -3,29 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台股即時監控 Dashboard</title>
+    <title>台股同步監控 Dashboard</title>
+    <!-- 引入必要的 Library -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-    <style>
-        @keyframes pulse-blue { 0% { background-color: rgba(59, 130, 246, 0.1); } 50% { background-color: transparent; } 100% { background-color: rgba(59, 130, 246, 0.1); } }
-        .refreshing { animation: pulse-blue 2s infinite; }
-    </style>
 </head>
-<body class="bg-slate-100 p-4 md:p-8">
+<body class="bg-slate-50">
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // --- 請在此填入你的 Supabase 資訊 ---
+        // --- 請務必填入正確資訊 ---
         const SUPABASE_URL = 'https://ygrolfbgjzvskkpeyidb.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlncm9sZmJnanp2c2trcGV5aWRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwOTUzMjQsImV4cCI6MjA4ODY3MTMyNH0.odS73zRirsuqXs0tBzlK_OEDplFU0Q1W060M5u8lTRM';
-        // ----------------------------------
+        // -----------------------
 
-        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        // 確保 Supabase 正確初始化
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         const App = () => {
             const [stocks, setStocks] = useState([]);
@@ -37,50 +35,72 @@
             const TAX_RATE = 0.003;
             const MIN_FEE = 20;
 
-            // 抓取台股即時報價 (透過 Yahoo Finance 代理)
+            // 抓取即時報價 (透過 AllOrigins 代理繞過 CORS)
             const fetchRealTimePrice = async (symbol) => {
                 try {
-                    // 台股需加上 .TW (上市) 或 .TWO (上櫃)，這裡簡單判斷：4碼通常是上市
                     const fullSymbol = symbol.length <= 4 ? `${symbol}.TW` : `${symbol}.TWO`;
-                    const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${fullSymbol}`);
-                    const json = await res.json();
-                    const quote = json.chart.result[0].meta;
+                    const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fullSymbol}`;
+                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+                    
+                    const res = await fetch(proxyUrl);
+                    const data = await res.json();
+                    const contents = JSON.parse(data.contents);
+                    const quote = contents.chart.result[0].meta;
+                    
                     return {
                         price: quote.regularMarketPrice,
-                        name: quote.symbol // Yahoo API 簡版名稱
+                        name: symbol // 先用代號當名稱
                     };
                 } catch (e) {
-                    console.error("抓取股價失敗:", symbol);
-                    return { price: 0, name: "未知" };
+                    console.error("報價抓取失敗:", symbol, e);
+                    return { price: null, name: symbol };
                 }
             };
 
-            // 從 Supabase 抓取資料並更新股價
             const refreshAllData = async () => {
                 setIsRefreshing(true);
-                const { data, error } = await supabaseClient.from('stocks').select('*').order('created_at', { ascending: true });
-                
-                if (!error && data) {
-                    const updatedStocks = await Promise.all(data.map(async (s) => {
-                        const info = await fetchRealTimePrice(s.symbol);
-                        return { ...s, current_price: info.price, name: s.name || info.name };
-                    }));
-                    setStocks(updatedStocks);
+                try {
+                    const { data, error } = await supabaseClient.from('stocks').select('*').order('created_at', { ascending: true });
+                    
+                    if (error) throw error;
+
+                    if (data) {
+                        const updatedStocks = await Promise.all(data.map(async (s) => {
+                            const info = await fetchRealTimePrice(s.symbol);
+                            return { 
+                                ...s, 
+                                current_price: info.price || s.current_price || 0 
+                            };
+                        }));
+                        setStocks(updatedStocks);
+                    }
+                } catch (err) {
+                    console.error("資料讀取錯誤:", err);
+                    alert("連線資料庫失敗，請檢查 URL 與 Key 是否正確");
+                } finally {
+                    setLoading(false);
+                    setIsRefreshing(false);
                 }
-                setLoading(false);
-                setIsRefreshing(false);
             };
 
-            useEffect(() => { refreshAllData(); }, []);
+            useEffect(() => {
+                if (SUPABASE_URL.includes('你的')) {
+                    alert("請先在程式碼中設定 SUPABASE_URL 和 KEY！");
+                } else {
+                    refreshAllData();
+                }
+            }, []);
 
             const calculateProfit = (stock) => {
-                if (!stock.current_price) return { totalProfit: 0, returnRate: 0 };
+                if (!stock.current_price || !stock.buy_price) return { totalProfit: 0, returnRate: 0 };
                 const buyAmount = stock.buy_price * stock.shares;
                 const buyFee = Math.max(MIN_FEE, Math.floor(buyAmount * FEE_RATE));
                 const totalCost = buyAmount + buyFee;
+                
                 const sellAmount = stock.current_price * stock.shares;
                 const sellFee = Math.max(MIN_FEE, Math.floor(sellAmount * FEE_RATE));
                 const sellTax = Math.floor(sellAmount * TAX_RATE);
+                
                 const totalProfit = Math.round(sellAmount - sellFee - sellTax - totalCost);
                 const returnRate = ((totalProfit / totalCost) * 100).toFixed(2);
                 return { totalProfit, returnRate };
@@ -88,21 +108,111 @@
 
             const addStock = async (e) => {
                 e.preventDefault();
-                if (!formData.symbol) return;
+                if (!formData.symbol || !formData.buyPrice) return;
                 
-                // 新增時先去抓一次名稱
+                setIsRefreshing(true);
                 const info = await fetchRealTimePrice(formData.symbol);
                 
                 const newStock = {
                     symbol: formData.symbol,
-                    name: formData.symbol, // 先用代號當名稱
+                    name: formData.symbol,
                     buy_price: parseFloat(formData.buyPrice),
-                    shares: parseInt(formData.shares),
-                    current_price: info.price
+                    shares: parseInt(formData.shares) || 0,
+                    current_price: info.price || 0
                 };
                 
                 const { error } = await supabaseClient.from('stocks').insert([newStock]);
-                if (!error) {
+                if (error) {
+                    alert("新增失敗: " + error.message);
+                } else {
                     setFormData({ symbol: '', buyPrice: '', shares: '' });
                     refreshAllData();
                 }
+            };
+
+            const deleteStock = async (id) => {
+                const { error } = await supabaseClient.from('stocks').delete().eq('id', id);
+                if (!error) refreshAllData();
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto p-4 md:p-8">
+                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+                        <div>
+                            <h1 className="text-3xl font-extrabold text-slate-800">My Stock <span className="text-blue-600">Sync</span></h1>
+                            <p className="text-slate-500 text-sm">國泰手續費 2.8 折計算 (跨裝置同步)</p>
+                        </div>
+                        <button 
+                            onClick={refreshAllData} 
+                            className={`w-full md:w-auto px-6 py-2 rounded-full font-bold transition ${isRefreshing ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-200'}`}
+                        >
+                            {isRefreshing ? '更新中...' : '🔄 立即更新報價'}
+                        </button>
+                    </header>
+
+                    <form onSubmit={addStock} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 mb-8 grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <input placeholder="股票代號 (例: 2330)" className="bg-slate-50 p-3 rounded-xl border-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500 outline-none" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} required />
+                        <input type="number" step="0.01" placeholder="買進均價" className="bg-slate-50 p-3 rounded-xl border-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500 outline-none" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} required />
+                        <input type="number" placeholder="股數" className="bg-slate-50 p-3 rounded-xl border-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500 outline-none" value={formData.shares} onChange={e => setFormData({...formData, shares: e.target.value})} required />
+                        <button type="submit" className="bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition">加入清單</button>
+                    </form>
+
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-50 border-b border-slate-100">
+                                    <tr>
+                                        <th className="p-5 text-slate-500 font-semibold text-sm">股票代號</th>
+                                        <th className="p-5 text-blue-600 font-semibold text-sm">即時報價</th>
+                                        <th className="p-5 text-slate-500 font-semibold text-sm">買進均價</th>
+                                        <th className="p-5 text-slate-500 font-semibold text-sm">持股</th>
+                                        <th className="p-5 text-slate-500 font-semibold text-sm">預估損益</th>
+                                        <th className="p-5 text-slate-500 font-semibold text-sm">報酬率</th>
+                                        <th className="p-5 text-center"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {loading ? (
+                                        <tr><td colSpan="7" className="p-20 text-center text-slate-400 font-medium">資料載入中...</td></tr>
+                                    ) : stocks.length === 0 ? (
+                                        <tr><td colSpan="7" className="p-20 text-center text-slate-400">目前沒有持股，請新增第一筆。</td></tr>
+                                    ) : stocks.map(stock => {
+                                        const { totalProfit, returnRate } = calculateProfit(stock);
+                                        const isProfit = totalProfit >= 0;
+                                        return (
+                                            <tr key={stock.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 transition">
+                                                <td className="p-5 font-bold text-slate-700">{stock.symbol}</td>
+                                                <td className="p-5 font-black text-xl text-blue-600">
+                                                    {stock.current_price ? `$${stock.current_price}` : '---'}
+                                                </td>
+                                                <td className="p-5 text-slate-500 font-medium">{stock.buy_price}</td>
+                                                <td className="p-5 text-slate-500 font-medium">{stock.shares.toLocaleString()}</td>
+                                                <td className={`p-5 font-black text-lg ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                    {isProfit ? '+' : ''}{totalProfit.toLocaleString()}
+                                                </td>
+                                                <td className={`p-5 font-bold ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                    <span className={`px-3 py-1 rounded-full ${isProfit ? 'bg-red-50' : 'bg-green-50'}`}>
+                                                        {isProfit ? '+' : ''}{returnRate}%
+                                                    </span>
+                                                </td>
+                                                <td className="p-5 text-center">
+                                                    <button onClick={() => deleteStock(stock.id)} className="text-slate-300 hover:text-red-500 transition">
+                                                        刪除
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
