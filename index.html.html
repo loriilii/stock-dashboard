@@ -150,7 +150,7 @@
                 <div className="max-w-7xl mx-auto p-4 md:p-8">
                     <header className="flex justify-between items-center mb-8">
                         <div>
-                            <h1 className="text-2xl font-black text-slate-800 tracking-tight">實戰數據中心</h1>
+                            <h1 className="text-2xl font-black text-slate-800 tracking-tight">勇往直錢</h1>
                             <p className="text-slate-500 text-sm font-medium">Synced with Cloud Database</p>
                         </div>
                         <button onClick={refreshAllData} className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold shadow-lg shadow-blue-100 transition hover:bg-blue-700 active:scale-95 text-sm">
@@ -162,7 +162,7 @@
                         <input placeholder="代碼 (例: 2330)" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} required />
                         <input type="number" step="0.01" placeholder="買入均價" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} required />
                         <input type="number" placeholder="股數" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.shares} onChange={e => setFormData({...formData, shares: e.target.value})} required />
-                        <button type="submit" className="bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 shadow-lg transition">加入監控</button>
+                        <button type="submit" className="bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 shadow-lg transition">加入觀察</button>
                     </form>
 
                     <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
@@ -220,3 +220,4 @@
     </script>
 </body>
 </html>
+
