@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票報酬率 Dashboard</title>
+    <!-- 使用 CDN 引入 React 與 Tailwind，不需透過 Vercel 編譯 -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4 md:p-8">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const App = () => {
+            const [stocks, setStocks] = useState([]);
+            const [formData, setFormData] = useState({ symbol: '', name: '', buyPrice: '', shares: '' });
+
+            const FEE_RATE = 0.001425 * 0.28;
+            const TAX_RATE = 0.003;
+            const MIN_FEE = 20;
+
+            useEffect(() => {
+                const saved = localStorage.getItem('v3_stocks');
+                if (saved) setStocks(JSON.parse(saved));
+            }, []);
+
+            useEffect(() => {
+                localStorage.setItem('v3_stocks', JSON.stringify(stocks));
+            }, [stocks]);
+
+            const calculateProfit = (stock) => {
+                const buyPrice = parseFloat(stock.buyPrice);
+                const shares = parseInt(stock.shares);
+                const currentPrice = parseFloat(stock.currentPrice);
+
+                const buyAmount = buyPrice * shares;
+                const buyFee = Math.max(MIN_FEE, Math.floor(buyAmount * FEE_RATE));
+                const totalCost = buyAmount + buyFee;
+
+                const sellAmount = currentPrice * shares;
+                const sellFee = Math.max(MIN_FEE, Math.floor(sellAmount * FEE_RATE));
+                const sellTax = Math.floor(sellAmount * TAX_RATE);
+                
+                const netIncome = sellAmount - sellFee - sellTax;
+                const totalProfit = netIncome - totalCost;
+                const returnRate = (totalProfit / totalCost) * 100;
+
+                return {
+                    totalProfit: Math.round(totalProfit),
+                    returnRate: returnRate.toFixed(2)
+                };
+            };
+
+            const addStock = (e) => {
+                e.preventDefault();
+                if (!formData.symbol || !formData.buyPrice || !formData.shares) return;
+                const newStock = { ...formData, id: Date.now(), currentPrice: formData.buyPrice };
+                setStocks([...stocks, newStock]);
+                setFormData({ symbol: '', name: '', buyPrice: '', shares: '' });
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto">
+                    <h1 className="text-2xl font-bold mb-6 text-gray-800">股票投資損益 Dashboard (國泰 2.8折)</h1>
+                    
+                    <form onSubmit={addStock} className="bg-white p-6 rounded-xl shadow-sm mb-8 grid grid-cols-2 md:grid-cols-5 gap-4">
+                        <input placeholder="代號" className="border p-2 rounded" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} />
+                        <input placeholder="名稱" className="border p-2 rounded" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                        <input type="number" step="0.01" placeholder="買進價" className="border p-2 rounded" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} />
+                        <input type="number" placeholder="股數" className="border p-2 rounded" value={formData.shares} onChange={e => setFormData({...formData, shares: e.target.value})} />
+                        <button type="submit" className="bg-blue-600 text-white rounded hover:bg-blue-700">新增持股</button>
+                    </form>
+
+                    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                        <table className="w-full text-left">
+                            <thead className="bg-gray-50 border-b">
+                                <tr>
+                                    <th className="p-4">代號 / 名稱</th>
+                                    <th className="p-4 text-blue-600">即時價格 (可修改)</th>
+                                    <th className="p-4">買進均價</th>
+                                    <th className="p-4">總獲利</th>
+                                    <th className="p-4">報酬率</th>
+                                    <th className="p-4">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {stocks.map(stock => {
+                                    const { totalProfit, returnRate } = calculateProfit(stock);
+                                    const isProfit = totalProfit >= 0;
+                                    return (
+                                        <tr key={stock.id} className="border-b hover:bg-gray-50">
+                                            <td className="p-4">
+                                                <div className="font-bold">{stock.symbol}</div>
+                                                <div className="text-sm text-gray-500">{stock.name}</div>
+                                            </td>
+                                            <td className="p-4">
+                                                <input 
+                                                    type="number" step="0.01"
+                                                    value={stock.currentPrice}
+                                                    onChange={(e) => setStocks(stocks.map(s => s.id === stock.id ? { ...s, currentPrice: e.target.value } : s))}
+                                                    className="w-24 border-b-2 border-blue-200 text-blue-600 font-bold bg-transparent outline-none"
+                                                />
+                                            </td>
+                                            <td className="p-4">{stock.buyPrice}</td>
+                                            <td className={`p-4 font-bold ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                {isProfit ? '+' : ''}{totalProfit.toLocaleString()}
+                                            </td>
+                                            <td className={`p-4 font-bold ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                {isProfit ? '+' : ''}{returnRate}%
+                                            </td>
+                                            <td className="p-4">
+                                                <button onClick={() => setStocks(stocks.filter(s => s.id !== stock.id))} className="text-gray-400 hover:text-red-500">刪除</button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
