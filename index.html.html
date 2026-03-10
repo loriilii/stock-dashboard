@@ -4,23 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
-    <!-- 網頁標題：瀏覽器分頁會顯示這個 -->
+    <!-- 預覽偽裝 -->
     <title>精油內觀練習</title>
-
-    <!-- 網址預覽偽裝 (Open Graph Meta Tags) -->
     <meta property="og:title" content="精油內觀練習 - 每日身心靈平衡指南">
     <meta property="og:description" content="透過精油與內觀呼吸，找回內心的平靜。本練習僅供內部學員使用。">
     <meta property="og:type" content="website">
-    <meta name="description" content="提供身心靈平衡的日常練習指南，結合精油香氛與冥想。">
 
-    <!-- 引入 Library -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body class="bg-slate-50 text-slate-900 font-sans">
     <div id="root"></div>
 
     <script type="text/babel">
@@ -48,28 +44,28 @@
                 if (authStatus === 'true') setIsAuthenticated(true);
             }, []);
 
-            const handleLogin = (e) => {
-                e.preventDefault();
-                if (inputPassword === CORRECT_PASSWORD) {
-                    setIsAuthenticated(true);
-                    sessionStorage.setItem('isAuth', 'true');
-                } else {
-                    alert('驗證碼不正確，請重新確認。');
-                    setInputPassword('');
-                }
-            };
-
-            const fetchRealTimePrice = async (symbol) => {
+            // 抓取即時報價與股票名稱
+            const fetchStockData = async (symbol) => {
                 try {
                     const fullSymbol = symbol.length <= 4 ? `${symbol}.TW` : `${symbol}.TWO`;
-                    const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fullSymbol}`;
+                    // 使用 quote API 可以同時拿到價格與名稱
+                    const targetUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${fullSymbol}`;
                     const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+                    
                     const res = await fetch(proxyUrl);
                     const data = await res.json();
                     const contents = JSON.parse(data.contents);
-                    const quote = contents.chart.result[0].meta;
-                    return quote.regularMarketPrice;
-                } catch (e) { return null; }
+                    const result = contents.quoteResponse.result[0];
+                    
+                    return {
+                        price: result.regularMarketPrice,
+                        // 優先取中文名或短名稱，若無則顯示代號
+                        name: result.longName || result.shortName || symbol 
+                    };
+                } catch (e) { 
+                    console.error("抓取失敗", e);
+                    return { price: null, name: symbol }; 
+                }
             };
 
             const refreshAllData = async () => {
@@ -77,8 +73,8 @@
                 const { data, error } = await supabaseClient.from('stocks').select('*').order('created_at', { ascending: true });
                 if (!error && data) {
                     const updatedStocks = await Promise.all(data.map(async (s) => {
-                        const price = await fetchRealTimePrice(s.symbol);
-                        return { ...s, current_price: price || s.current_price };
+                        const info = await fetchStockData(s.symbol);
+                        return { ...s, current_price: info.price || s.current_price, name: s.name || info.name };
                     }));
                     setStocks(updatedStocks);
                 }
@@ -90,6 +86,7 @@
                 if (isAuthenticated) refreshAllData();
             }, [isAuthenticated]);
 
+            // 精確損益公式
             const calculateProfit = (stock) => {
                 const B2 = parseFloat(stock.buy_price);
                 const C2 = parseFloat(stock.shares);
@@ -106,12 +103,14 @@
             const addStock = async (e) => {
                 e.preventDefault();
                 if (!formData.symbol || !formData.buyPrice) return;
-                const price = await fetchRealTimePrice(formData.symbol);
+                setIsRefreshing(true);
+                const info = await fetchStockData(formData.symbol);
                 const newStock = {
                     symbol: formData.symbol,
+                    name: info.name, // 自動抓取的名稱
                     buy_price: parseFloat(formData.buyPrice),
                     shares: parseInt(formData.shares) || 0,
-                    current_price: price || 0
+                    current_price: info.price || 0
                 };
                 await supabaseClient.from('stocks').insert([newStock]);
                 setFormData({ symbol: '', buyPrice: '', shares: '' });
@@ -123,25 +122,24 @@
                 refreshAllData();
             };
 
-            // 偽裝登入介面
             if (!isAuthenticated) {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-stone-100 p-4">
                         <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-sm text-center">
-                            <h2 className="text-xl font-bold text-stone-600 mb-2">精油內觀練習</h2>
-                            <p className="text-stone-400 text-xs mb-6">Internal Access Only</p>
-                            <form onSubmit={handleLogin}>
-                                <input 
-                                    type="password" 
-                                    placeholder="請輸入認證碼" 
-                                    className="w-full p-4 bg-stone-50 rounded-2xl mb-4 border-none outline-none ring-1 ring-stone-200 focus:ring-2 focus:ring-stone-400 text-center"
-                                    value={inputPassword}
-                                    onChange={(e) => setInputPassword(e.target.value)}
-                                    autoFocus
-                                />
-                                <button className="w-full bg-stone-500 text-white p-4 rounded-2xl font-bold hover:bg-stone-600 transition shadow-lg">
-                                    進入練習
-                                </button>
+                            <h2 className="text-xl font-bold text-stone-600 mb-2 tracking-widest">精油內觀練習</h2>
+                            <p className="text-stone-400 text-xs mb-8">Internal Verification</p>
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                if (inputPassword === CORRECT_PASSWORD) {
+                                    setIsAuthenticated(true);
+                                    sessionStorage.setItem('isAuth', 'true');
+                                } else {
+                                    alert('驗證碼錯誤');
+                                    setInputPassword('');
+                                }
+                            }}>
+                                <input type="password" placeholder="輸入密鑰" className="w-full p-4 bg-stone-50 rounded-2xl mb-4 border-none outline-none ring-1 ring-stone-200 focus:ring-2 focus:ring-stone-400 text-center font-bold" value={inputPassword} onChange={(e) => setInputPassword(e.target.value)} autoFocus />
+                                <button className="w-full bg-stone-600 text-white p-4 rounded-2xl font-bold hover:bg-stone-700 transition shadow-lg">進入系統</button>
                             </form>
                         </div>
                     </div>
@@ -149,20 +147,20 @@
             }
 
             return (
-                <div className="max-w-6xl mx-auto p-4 md:p-8">
-                    <div className="flex justify-between items-center mb-8">
+                <div className="max-w-7xl mx-auto p-4 md:p-8">
+                    <header className="flex justify-between items-center mb-8">
                         <div>
-                            <h1 className="text-3xl font-black text-slate-800 tracking-tight underline decoration-blue-500">勇往直錢</h1>
-                            <p className="text-slate-500 font-medium mt-1">國泰 2.8 折損益同步系統</p>
+                            <h1 className="text-2xl font-black text-slate-800 tracking-tight">實戰數據中心</h1>
+                            <p className="text-slate-500 text-sm font-medium">Synced with Cloud Database</p>
                         </div>
-                        <button onClick={refreshAllData} className="bg-blue-600 text-white px-6 py-2 rounded-full font-bold shadow-lg shadow-blue-100 transition hover:bg-blue-700">
-                            {isRefreshing ? '讀取中...' : '同步數據'}
+                        <button onClick={refreshAllData} className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold shadow-lg shadow-blue-100 transition hover:bg-blue-700 active:scale-95 text-sm">
+                            {isRefreshing ? '同步中...' : '🔄 立即同步數據'}
                         </button>
-                    </div>
+                    </header>
 
                     <form onSubmit={addStock} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 mb-8 grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <input placeholder="代號" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} required />
-                        <input type="number" step="0.01" placeholder="買進價" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} required />
+                        <input placeholder="代碼 (例: 2330)" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} required />
+                        <input type="number" step="0.01" placeholder="買入均價" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} required />
                         <input type="number" placeholder="股數" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.shares} onChange={e => setFormData({...formData, shares: e.target.value})} required />
                         <button type="submit" className="bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 shadow-lg transition">加入監控</button>
                     </form>
@@ -170,39 +168,41 @@
                     <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
                         <div className="overflow-x-auto">
                             <table className="w-full text-left">
-                                <thead className="bg-slate-50/50 border-b border-slate-50">
+                                <thead className="bg-slate-50/50 border-b border-slate-100">
                                     <tr>
-                                        <th className="p-5 text-slate-400 font-bold text-xs">股票</th>
-                                        <th className="p-5 text-blue-600 font-bold text-xs">即時</th>
-                                        <th className="p-5 text-slate-400 font-bold text-xs">均價</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs">代碼</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs">股票名稱</th>
+                                        <th className="p-5 text-blue-600 font-bold text-xs">即時價</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs">買入價</th>
                                         <th className="p-5 text-slate-400 font-bold text-xs">股數</th>
-                                        <th className="p-5 text-slate-400 font-bold text-xs">損益</th>
-                                        <th className="p-5 text-slate-400 font-bold text-xs">報酬率</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs text-right">預估損益</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs text-center">報酬率</th>
                                         <th className="p-5"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {loading ? (
-                                        <tr><td colSpan="7" className="p-10 text-center text-slate-300">連線中...</td></tr>
+                                        <tr><td colSpan="8" className="p-10 text-center text-slate-300">連線資料庫中...</td></tr>
                                     ) : stocks.map(stock => {
                                         const { totalProfit, returnRate } = calculateProfit(stock);
                                         const isProfit = totalProfit >= 0;
                                         return (
-                                            <tr key={stock.id} className="border-b border-slate-50 hover:bg-slate-50 transition">
+                                            <tr key={stock.id} className="border-b border-slate-50 hover:bg-slate-50/80 transition">
                                                 <td className="p-5 font-bold text-slate-700">{stock.symbol}</td>
+                                                <td className="p-5 text-slate-600 font-medium text-sm">{stock.name}</td>
                                                 <td className="p-5 font-black text-xl text-blue-600">{stock.current_price ? `$${stock.current_price}` : '--'}</td>
-                                                <td className="p-5 text-slate-500">{stock.buy_price}</td>
-                                                <td className="p-5 text-slate-500">{stock.shares.toLocaleString()}</td>
-                                                <td className={`p-5 font-black text-lg ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                <td className="p-5 text-slate-500 text-sm font-medium">{stock.buy_price}</td>
+                                                <td className="p-5 text-slate-500 text-sm font-medium">{stock.shares.toLocaleString()}</td>
+                                                <td className={`p-5 font-black text-lg text-right ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
                                                     {isProfit ? '+' : ''}{totalProfit.toLocaleString()}
                                                 </td>
-                                                <td className={`p-5 font-bold ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
-                                                    <span className={`px-3 py-1 rounded-full ${isProfit ? 'bg-red-50' : 'bg-green-50'}`}>
+                                                <td className={`p-5 font-bold text-center ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                    <span className={`px-3 py-1 rounded-full text-sm ${isProfit ? 'bg-red-50' : 'bg-green-50'}`}>
                                                         {isProfit ? '+' : ''}{returnRate}%
                                                     </span>
                                                 </td>
                                                 <td className="p-5 text-center">
-                                                    <button onClick={() => deleteStock(stock.id)} className="text-slate-200 hover:text-red-500 transition">刪除</button>
+                                                    <button onClick={() => deleteStock(stock.id)} className="text-slate-200 hover:text-red-500 transition px-2 py-1">刪除</button>
                                                 </td>
                                             </tr>
                                         );
@@ -220,4 +220,3 @@
     </script>
 </body>
 </html>
-
