@@ -16,18 +16,18 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body class="bg-slate-50 text-slate-900 font-sans">
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // --- 設定區 (請務必填寫) ---
+        // --- 設定區 ---
         const SUPABASE_URL = 'https://ygrolfbgjzvskkpeyidb.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlncm9sZmJnanp2c2trcGV5aWRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwOTUzMjQsImV4cCI6MjA4ODY3MTMyNH0.odS73zRirsuqXs0tBzlK_OEDplFU0Q1W060M5u8lTRM';
         const CORRECT_PASSWORD = 'pizzahot666'; 
         const DISCOUNT = 0.28; 
-        // -------------------------
+        // --------------
 
         const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -38,40 +38,27 @@
             const [loading, setLoading] = useState(true);
             const [isRefreshing, setIsRefreshing] = useState(false);
             const [formData, setFormData] = useState({ symbol: '', buyPrice: '', shares: '' });
+            
+            // 試算列狀態
+            const [trialData, setTrialData] = useState({ buyPrice: '', shares: '', targetPrice: '' });
 
             useEffect(() => {
                 const authStatus = sessionStorage.getItem('isAuth');
                 if (authStatus === 'true') setIsAuthenticated(true);
             }, []);
 
-            // 抓取即時報價與股票名稱的優化函數
-            const fetchStockData = async (symbol) => {
+            // 抓取即時報價
+            const fetchPriceOnly = async (symbol) => {
                 try {
                     const cleanSymbol = symbol.trim();
                     const fullSymbol = cleanSymbol.length <= 4 ? `${cleanSymbol}.TW` : `${cleanSymbol}.TWO`;
-                    
-                    // 加上隨機參數防止快取
                     const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fullSymbol}?interval=1m&range=1d&t=${Date.now()}`;
                     const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
-                    
                     const res = await fetch(proxyUrl);
-                    if (!res.ok) throw new Error("Proxy error");
-                    
                     const data = await res.json();
                     const contents = JSON.parse(data.contents);
-                    const result = contents.chart.result[0];
-                    const meta = result.meta;
-                    
-                    // 嘗試從 Yahoo 抓取顯示名稱，若無則顯示代碼
-                    // 在 Yahoo Chart API 中，shortName 或 symbol 通常在 meta 裡
-                    return {
-                        price: meta.regularMarketPrice,
-                        name: meta.symbol === fullSymbol ? cleanSymbol : meta.symbol 
-                    };
-                } catch (e) { 
-                    console.error("抓取失敗", symbol, e);
-                    return { price: null, name: symbol }; 
-                }
+                    return contents.chart.result[0].meta.regularMarketPrice;
+                } catch (e) { return null; }
             };
 
             const refreshAllData = async () => {
@@ -79,13 +66,8 @@
                 const { data, error } = await supabaseClient.from('stocks').select('*').order('created_at', { ascending: true });
                 if (!error && data) {
                     const updatedStocks = await Promise.all(data.map(async (s) => {
-                        const info = await fetchStockData(s.symbol);
-                        return { 
-                            ...s, 
-                            current_price: info.price || s.current_price, 
-                            // 只有在資料庫名稱為空或代碼時，才更新為抓取到的名稱
-                            name: (s.name && s.name !== s.symbol) ? s.name : info.name 
-                        };
+                        const price = await fetchPriceOnly(s.symbol);
+                        return { ...s, current_price: price || s.current_price };
                     }));
                     setStocks(updatedStocks);
                 }
@@ -97,33 +79,30 @@
                 if (isAuthenticated) refreshAllData();
             }, [isAuthenticated]);
 
-            // 精確損益公式邏輯
-            const calculateProfit = (stock) => {
-                const B2 = parseFloat(stock.buy_price);
-                const C2 = parseFloat(stock.shares);
-                const D2 = parseFloat(stock.current_price);
+            // 精確損益計算公式邏輯
+            const calcFunc = (buyP, shares, currentP) => {
+                const B2 = parseFloat(buyP);
+                const C2 = parseFloat(shares);
+                const D2 = parseFloat(currentP);
                 const E2 = DISCOUNT;
-                if (!D2 || !B2 || !C2) return { totalProfit: 0, returnRate: 0 };
+                if (!D2 || !B2 || !C2) return { profit: 0, rate: 0 };
 
-                const actualBuyCost = (B2 * C2) + Math.max(20, B2 * C2 * 0.001425 * E2);
-                const expectedSellNet = (D2 * C2) - Math.max(20, D2 * C2 * 0.001425 * E2) - (D2 * C2 * 0.003);
-                const totalProfit = Math.round(expectedSellNet - actualBuyCost);
-                const returnRate = ((totalProfit / actualBuyCost) * 100).toFixed(2);
-                
-                return { totalProfit, returnRate };
+                const buyCost = (B2 * C2) + Math.max(20, B2 * C2 * 0.001425 * E2);
+                const sellNet = (D2 * C2) - Math.max(20, D2 * C2 * 0.001425 * E2) - (D2 * C2 * 0.003);
+                const profit = Math.round(sellNet - buyCost);
+                const rate = ((profit / buyCost) * 100).toFixed(2);
+                return { profit, rate };
             };
 
             const addStock = async (e) => {
                 e.preventDefault();
-                if (!formData.symbol || !formData.buyPrice) return;
                 setIsRefreshing(true);
-                const info = await fetchStockData(formData.symbol);
+                const price = await fetchPriceOnly(formData.symbol);
                 const newStock = {
                     symbol: formData.symbol.trim(),
-                    name: info.name,
                     buy_price: parseFloat(formData.buyPrice),
                     shares: parseInt(formData.shares) || 0,
-                    current_price: info.price || 0
+                    current_price: price || 0
                 };
                 await supabaseClient.from('stocks').insert([newStock]);
                 setFormData({ symbol: '', buyPrice: '', shares: '' });
@@ -131,7 +110,7 @@
             };
 
             const deleteStock = async (id) => {
-                if(!confirm("確定要刪除嗎？")) return;
+                if(!confirm("確定要刪除此筆持股嗎？")) return;
                 await supabaseClient.from('stocks').delete().eq('id', id);
                 refreshAllData();
             };
@@ -139,92 +118,90 @@
             if (!isAuthenticated) {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-stone-100 p-4">
-                        <div className="bg-white p-10 rounded-[2.5rem] shadow-xl w-full max-w-sm text-center">
+                        <div className="bg-white p-10 rounded-[3rem] shadow-xl w-full max-w-sm text-center border border-stone-200">
                             <h2 className="text-xl font-bold text-stone-600 mb-2 tracking-widest">精油內觀練習</h2>
-                            <p className="text-stone-400 text-[10px] mb-8 uppercase tracking-widest">Internal Verification Only</p>
+                            <p className="text-stone-400 text-[10px] mb-8 uppercase tracking-[0.2em]">Personal Meditation</p>
                             <form onSubmit={(e) => {
                                 e.preventDefault();
                                 if (inputPassword === CORRECT_PASSWORD) {
                                     setIsAuthenticated(true);
                                     sessionStorage.setItem('isAuth', 'true');
                                 } else {
-                                    alert('驗證碼錯誤');
+                                    alert('認證碼錯誤');
                                     setInputPassword('');
                                 }
                             }}>
-                                <input type="password" placeholder="輸入認證碼" className="w-full p-4 bg-stone-50 rounded-2xl mb-4 border-none outline-none ring-1 ring-stone-200 focus:ring-2 focus:ring-stone-400 text-center font-bold" value={inputPassword} onChange={(e) => setInputPassword(e.target.value)} autoFocus />
-                                <button className="w-full bg-stone-600 text-white p-4 rounded-2xl font-bold hover:bg-stone-700 transition-all active:scale-95 shadow-lg">進入練習</button>
+                                <input type="password" placeholder="Key" className="w-full p-4 bg-stone-50 rounded-2xl mb-4 border-none outline-none ring-1 ring-stone-200 focus:ring-2 focus:ring-stone-400 text-center font-bold" value={inputPassword} onChange={(e) => setInputPassword(e.target.value)} autoFocus />
+                                <button className="w-full bg-stone-700 text-white p-4 rounded-2xl font-bold hover:bg-stone-800 transition-all shadow-lg">認證</button>
                             </form>
                         </div>
                     </div>
                 );
             }
 
+            // 試算結果
+            const trialResult = calcFunc(trialData.buyPrice, trialData.shares, trialData.targetPrice);
+
             return (
-                <div className="max-w-7xl mx-auto p-4 md:p-8">
-                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+                <div className="max-w-6xl mx-auto p-4 md:p-10">
+                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
                         <div>
-                            <h1 className="text-4xl font-black text-slate-800 tracking-tighter">勇往直錢</h1>
-                            <p className="text-slate-400 text-sm font-medium mt-1">Real-time Trading Dashboard (國泰 2.8折)</p>
+                            <h1 className="text-5xl font-black text-slate-800 tracking-tighter italic">勇往直錢</h1>
+                            <p className="text-slate-400 text-sm font-medium mt-2 uppercase tracking-widest">Live Portfolio Dashboard</p>
                         </div>
-                        <button 
-                            onClick={refreshAllData} 
-                            disabled={isRefreshing}
-                            className={`px-8 py-3 rounded-full font-bold shadow-xl transition-all active:scale-95 text-sm ${isRefreshing ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-100'}`}
-                        >
-                            {isRefreshing ? '同步中...' : '🔄 立即同步數據'}
+                        <button onClick={refreshAllData} disabled={isRefreshing} className={`px-8 py-3 rounded-full font-bold shadow-xl transition-all active:scale-95 ${isRefreshing ? 'bg-slate-200 text-slate-400' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-100'}`}>
+                            {isRefreshing ? '同步中...' : '🔄 立即同步最新報價'}
                         </button>
                     </header>
 
-                    <form onSubmit={addStock} className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 mb-8 grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <input placeholder="股票代碼 (例: 2330)" className="bg-slate-50 p-4 rounded-2xl border-none outline-none ring-1 ring-slate-100 focus:ring-2 focus:ring-blue-500" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} required />
-                        <input type="number" step="0.01" placeholder="買入均價" className="bg-slate-50 p-4 rounded-2xl border-none outline-none ring-1 ring-slate-100 focus:ring-2 focus:ring-blue-500" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} required />
-                        <input type="number" placeholder="持有股數" className="bg-slate-50 p-4 rounded-2xl border-none outline-none ring-1 ring-slate-100 focus:ring-2 focus:ring-blue-500" value={formData.shares} onChange={e => setFormData({...formData, shares: e.target.value})} required />
-                        <button type="submit" className="bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-900 transition-all active:scale-95 shadow-lg shadow-slate-200">加入監控</button>
-                    </form>
+                    {/* 新增持股 */}
+                    <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 mb-8">
+                        <h2 className="text-sm font-bold text-slate-400 mb-4 uppercase tracking-widest">新增實際持股</h2>
+                        <form onSubmit={addStock} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <input placeholder="代碼 (例: 2330)" className="bg-slate-50 p-4 rounded-2xl outline-none ring-1 ring-slate-100 focus:ring-2 focus:ring-blue-500" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} required />
+                            <input type="number" step="0.01" placeholder="買入均價" className="bg-slate-50 p-4 rounded-2xl outline-none ring-1 ring-slate-100 focus:ring-2 focus:ring-blue-500" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} required />
+                            <input type="number" placeholder="股數" className="bg-slate-50 p-4 rounded-2xl outline-none ring-1 ring-slate-100 focus:ring-2 focus:ring-blue-500" value={formData.shares} onChange={e => setFormData({...formData, shares: e.target.value})} required />
+                            <button type="submit" className="bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-900 transition-all shadow-lg shadow-slate-200">加入資料庫</button>
+                        </form>
+                    </div>
 
-                    <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
+                    {/* 持股清單 */}
+                    <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden mb-12">
                         <div className="overflow-x-auto">
                             <table className="w-full text-left">
-                                <thead className="bg-slate-50/50 border-b border-slate-50">
+                                <thead className="bg-slate-50 border-b border-slate-50 text-slate-400 text-[11px] font-bold uppercase">
                                     <tr>
-                                        <th className="p-6 text-slate-400 font-bold text-xs">代碼</th>
-                                        <th className="p-6 text-slate-400 font-bold text-xs">名稱</th>
-                                        <th className="p-6 text-blue-600 font-bold text-xs">即時價</th>
-                                        <th className="p-6 text-slate-400 font-bold text-xs">成本均價</th>
-                                        <th className="p-6 text-slate-400 font-bold text-xs">持有股數</th>
-                                        <th className="p-6 text-slate-400 font-bold text-xs text-right">預估損益</th>
-                                        <th className="p-6 text-slate-400 font-bold text-xs text-center">報酬率</th>
+                                        <th className="p-6">代號</th>
+                                        <th className="p-6 text-blue-600">即時報價</th>
+                                        <th className="p-6">買入均價</th>
+                                        <th className="p-6">股數</th>
+                                        <th className="p-6 text-right">預估損益</th>
+                                        <th className="p-6 text-center">報酬率</th>
                                         <th className="p-6"></th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-50">
                                     {loading ? (
-                                        <tr><td colSpan="8" className="p-20 text-center text-slate-300 animate-pulse font-medium">資料庫同步中...</td></tr>
-                                    ) : stocks.length === 0 ? (
-                                        <tr><td colSpan="8" className="p-20 text-center text-slate-400">目前沒有監控項目。</td></tr>
+                                        <tr><td colSpan="7" className="p-20 text-center text-slate-300 animate-pulse">連線中...</td></tr>
                                     ) : stocks.map(stock => {
-                                        const { totalProfit, returnRate } = calculateProfit(stock);
-                                        const isProfit = totalProfit >= 0;
+                                        const res = calcFunc(stock.buy_price, stock.shares, stock.current_price);
+                                        const isProfit = res.profit >= 0;
                                         return (
                                             <tr key={stock.id} className="hover:bg-slate-50/50 transition-colors group">
-                                                <td className="p-6 font-bold text-slate-800">{stock.symbol}</td>
-                                                <td className="p-6 text-slate-500 font-medium text-sm">{stock.name || '---'}</td>
-                                                <td className="p-6 font-black text-2xl text-blue-600 tabular-nums">
-                                                    {stock.current_price ? `${stock.current_price}` : <span className="text-slate-300 text-sm font-normal">讀取中</span>}
-                                                </td>
-                                                <td className="p-6 text-slate-500 font-medium">{stock.buy_price}</td>
+                                                <td className="p-6 font-bold text-slate-800 text-lg">{stock.symbol}</td>
+                                                <td className="p-6 font-black text-2xl text-blue-600">{stock.current_price || '--'}</td>
+                                                <td className="p-6 text-slate-500">{stock.buy_price}</td>
                                                 <td className="p-6 text-slate-500 font-medium">{stock.shares.toLocaleString()}</td>
-                                                <td className={`p-6 font-black text-xl text-right tabular-nums ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
-                                                    {isProfit ? '+' : ''}{totalProfit.toLocaleString()}
+                                                <td className={`p-6 font-black text-xl text-right ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                    {isProfit ? '+' : ''}{res.profit.toLocaleString()}
                                                 </td>
-                                                <td className={`p-6 text-center`}>
-                                                    <span className={`px-4 py-1.5 rounded-full font-bold text-sm ${isProfit ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
-                                                        {isProfit ? '+' : ''}{returnRate}%
+                                                <td className="p-6 text-center">
+                                                    <span className={`px-4 py-1 rounded-full font-bold text-sm ${isProfit ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
+                                                        {isProfit ? '+' : ''}{res.rate}%
                                                     </span>
                                                 </td>
                                                 <td className="p-6 text-center">
-                                                    <button onClick={() => deleteStock(stock.id)} className="text-slate-200 hover:text-red-500 transition-colors p-2 opacity-0 group-hover:opacity-100">刪除</button>
+                                                    <button onClick={() => deleteStock(stock.id)} className="text-slate-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-2">刪除</button>
                                                 </td>
                                             </tr>
                                         );
@@ -233,8 +210,48 @@
                             </table>
                         </div>
                     </div>
-                    <footer className="mt-8 text-center text-[10px] text-slate-300 uppercase tracking-widest">
-                        Data provided by Yahoo Finance Proxy • Precise Calculation Mode
+
+                    {/* 模擬試算區 */}
+                    <div className="bg-blue-600 p-1 rounded-[3rem] shadow-2xl shadow-blue-200">
+                        <div className="bg-white p-8 rounded-[2.8rem]">
+                            <h2 className="text-xl font-black text-blue-600 mb-6 flex items-center gap-2">
+                                <span className="bg-blue-600 text-white w-8 h-8 rounded-full flex items-center justify-center text-sm italic">?</span>
+                                模擬試算工具 (不儲存)
+                            </h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-slate-400 uppercase ml-2">假設買入價</label>
+                                    <input type="number" placeholder="0.00" className="w-full bg-slate-50 p-4 rounded-2xl border-none ring-1 ring-slate-100 outline-none focus:ring-2 focus:ring-blue-600 font-bold" value={trialData.buyPrice} onChange={e => setTrialData({...trialData, buyPrice: e.target.value})} />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-slate-400 uppercase ml-2">假設持有股數</label>
+                                    <input type="number" placeholder="1000" className="w-full bg-slate-50 p-4 rounded-2xl border-none ring-1 ring-slate-100 outline-none focus:ring-2 focus:ring-blue-600 font-bold" value={trialData.shares} onChange={e => setTrialData({...trialData, shares: e.target.value})} />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-slate-400 uppercase ml-2">預計賣出價</label>
+                                    <input type="number" placeholder="0.00" className="w-full bg-blue-50 p-4 rounded-2xl border-none ring-1 ring-blue-100 outline-none focus:ring-2 focus:ring-blue-600 font-bold text-blue-600" value={trialData.targetPrice} onChange={e => setTrialData({...trialData, targetPrice: e.target.value})} />
+                                </div>
+                            </div>
+
+                            <div className="mt-8 pt-8 border-t border-slate-50 grid grid-cols-2 gap-4 text-center">
+                                <div className="p-6 bg-slate-50 rounded-[2rem]">
+                                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">試算預估損益</p>
+                                    <p className={`text-4xl font-black ${trialResult.profit >= 0 ? 'text-red-500' : 'text-green-600'}`}>
+                                        {trialResult.profit >= 0 ? '+' : ''}{trialResult.profit.toLocaleString()}
+                                    </p>
+                                </div>
+                                <div className="p-6 bg-slate-50 rounded-[2rem]">
+                                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">試算預估報酬率</p>
+                                    <p className={`text-4xl font-black ${trialResult.profit >= 0 ? 'text-red-500' : 'text-green-600'}`}>
+                                        {trialResult.profit >= 0 ? '+' : ''}{trialResult.rate}%
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <footer className="mt-12 text-center text-[10px] text-slate-300 tracking-[0.3em] uppercase">
+                        Precise Trading Engine • Cloud Sync Active
                     </footer>
                 </div>
             );
@@ -245,4 +262,3 @@
     </script>
 </body>
 </html>
-
