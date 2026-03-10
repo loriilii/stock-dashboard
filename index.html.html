@@ -52,4 +52,130 @@
                 const { data, error } = await supabaseClient.from('stocks').select('*').order('created_at', { ascending: true });
                 if (!error && data) {
                     const updatedStocks = await Promise.all(data.map(async (s) => {
-                        const price = await fetchRealTimeP
+                        const price = await fetchRealTimePrice(s.symbol);
+                        return { ...s, current_price: price || s.current_price };
+                    }));
+                    setStocks(updatedStocks);
+                }
+                setLoading(false);
+                setIsRefreshing(false);
+            };
+
+            useEffect(() => { refreshAllData(); }, []);
+
+            // --- 精確損益計算公式邏輯 ---
+            const calculateProfit = (stock) => {
+                const B2 = parseFloat(stock.buy_price);    // 買進均價
+                const C2 = parseFloat(stock.shares);       // 股數
+                const D2 = parseFloat(stock.current_price);// 即時報價
+                const E2 = DISCOUNT;                       // 折扣 0.28
+
+                if (!D2 || !B2 || !C2) return { totalProfit: 0, returnRate: 0 };
+
+                // 1. 實際買入成本 = (買進均價 * 股數) + MAX(20, 買進均價 * 股數 * 0.001425 * 折扣)
+                const actualBuyCost = (B2 * C2) + Math.max(20, B2 * C2 * 0.001425 * E2);
+
+                // 2. 預估賣出淨額 = (即時報價 * 股數) - MAX(20, 即時報價 * 股數 * 0.001425 * 折扣) - (即時報價 * 股數 * 0.003)
+                const expectedSellNet = (D2 * C2) - Math.max(20, D2 * C2 * 0.001425 * E2) - (D2 * C2 * 0.003);
+
+                // 3. 總獲利 = ROUND(預估賣出淨額 - 實際買入成本, 0)
+                const totalProfit = Math.round(expectedSellNet - actualBuyCost);
+
+                // 4. 報酬率 = (總獲利 / 實際買入成本) * 100
+                const returnRate = ((totalProfit / actualBuyCost) * 100).toFixed(2);
+
+                return { totalProfit, returnRate };
+            };
+
+            const addStock = async (e) => {
+                e.preventDefault();
+                if (!formData.symbol || !formData.buyPrice) return;
+                const price = await fetchRealTimePrice(formData.symbol);
+                const newStock = {
+                    symbol: formData.symbol,
+                    buy_price: parseFloat(formData.buyPrice),
+                    shares: parseInt(formData.shares) || 0,
+                    current_price: price || 0
+                };
+                await supabaseClient.from('stocks').insert([newStock]);
+                setFormData({ symbol: '', buyPrice: '', shares: '' });
+                refreshAllData();
+            };
+
+            const deleteStock = async (id) => {
+                await supabaseClient.from('stocks').delete().eq('id', id);
+                refreshAllData();
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto p-4 md:p-8">
+                    <div className="flex justify-between items-center mb-8">
+                        <div>
+                            <h1 className="text-3xl font-black text-slate-800">台股損益同步</h1>
+                            <p className="text-slate-500 font-medium">國泰 2.8 折精確計算版</p>
+                        </div>
+                        <button onClick={refreshAllData} className="bg-white px-6 py-2 rounded-full shadow-sm text-blue-600 font-bold hover:shadow-md transition">
+                            {isRefreshing ? '更新中...' : '🔄 更新報價'}
+                        </button>
+                    </div>
+
+                    <form onSubmit={addStock} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8 grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <input placeholder="股票代號 (例: 2330)" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.symbol} onChange={e => setFormData({...formData, symbol: e.target.value})} required />
+                        <input type="number" step="0.01" placeholder="買進均價" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.buyPrice} onChange={e => setFormData({...formData, buyPrice: e.target.value})} required />
+                        <input type="number" placeholder="股數" className="bg-slate-50 p-3 rounded-xl border-none outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500" value={formData.shares} onChange={e => setFormData({...formData, shares: e.target.value})} required />
+                        <button type="submit" className="bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-lg shadow-blue-100 transition">新增持股</button>
+                    </form>
+
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-50 border-b border-slate-100">
+                                    <tr>
+                                        <th className="p-5 text-slate-400 font-bold text-xs uppercase">代號</th>
+                                        <th className="p-5 text-blue-600 font-bold text-xs uppercase">即時價</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs uppercase">買進均價</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs uppercase">股數</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs uppercase">預估損益</th>
+                                        <th className="p-5 text-slate-400 font-bold text-xs uppercase">報酬率</th>
+                                        <th className="p-5"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {loading ? (
+                                        <tr><td colSpan="7" className="p-10 text-center text-slate-400">連線中...</td></tr>
+                                    ) : stocks.map(stock => {
+                                        const { totalProfit, returnRate } = calculateProfit(stock);
+                                        const isProfit = totalProfit >= 0;
+                                        return (
+                                            <tr key={stock.id} className="border-b border-slate-50 hover:bg-slate-50 transition">
+                                                <td className="p-5 font-bold text-slate-700">{stock.symbol}</td>
+                                                <td className="p-5 font-black text-xl text-blue-600">{stock.current_price ? `$${stock.current_price}` : '---'}</td>
+                                                <td className="p-5 text-slate-500">{stock.buy_price}</td>
+                                                <td className="p-5 text-slate-500">{stock.shares.toLocaleString()}</td>
+                                                <td className={`p-5 font-black text-lg ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                    {isProfit ? '+' : ''}{totalProfit.toLocaleString()}
+                                                </td>
+                                                <td className={`p-5 font-bold ${isProfit ? 'text-red-500' : 'text-green-600'}`}>
+                                                    <span className={`px-3 py-1 rounded-md ${isProfit ? 'bg-red-50' : 'bg-green-50'}`}>
+                                                        {isProfit ? '+' : ''}{returnRate}%
+                                                    </span>
+                                                </td>
+                                                <td className="p-5 text-center">
+                                                    <button onClick={() => deleteStock(stock.id)} className="text-slate-300 hover:text-red-500 transition">刪除</button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
